@@ -68,7 +68,7 @@ class ChatBot:
 
         # Step 1: Retrieve relevant documents
         try:
-            docs = self.retriever.get_relevant_documents(question)[:top_k]
+            docs = self.retriever.similarity_search(question)[:top_k]
         except Exception as e:
             print(f"Error during retrieval: {e}")
             return {"answer": "Unable to retrieve documents.", "documents": []}
@@ -145,7 +145,7 @@ class ChatBot:
 if __name__ == "__main__":
     chatbot = ChatBot(
         pdf_path="attention_research_paper.pdf",
-        llm_model="gemini-1.5-pro",
+        llm_model="gemini-2.5-flash",
         embedding_model="models/embedding-001",
         persist_directory="vector_db"
     )
