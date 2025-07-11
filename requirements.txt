@@ -4,3 +4,4 @@ unstructured[pdf]
 pydantic
 python-dotenv
 chromadb
+langchain-chroma
