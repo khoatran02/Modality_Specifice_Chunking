@@ -39,7 +39,7 @@ class VectorDBManager:
         return vectorstore
     
     
-    def load_retriever(self) -> MultiVectorRetriever:
+    def load_retriever(self, id_key = "doc_id") -> MultiVectorRetriever:
         """
         Loads a persisted MultiVectorRetriever from disk.
         
@@ -51,19 +51,12 @@ class VectorDBManager:
         """
         if not self.exists():
             raise FileNotFoundError(f"No vector database found at {self.persist_directory}")
-        
-        embeddings = self.create_embeddings()
-        
+                
         # Load the persisted Chroma vectorstore
-        vectorstore = Chroma(
-            collection_name=self.collection_name,
-            embedding_function=embeddings,
-            persist_directory=self.persist_directory
-        )
-        
+        vectorstore = self.create_vectorstore()
+
         # Initialize an InMemoryStore for the docstore
         store = InMemoryStore()
-        id_key = "doc_id"
         
         # Create a MultiVectorRetriever
         retriever = MultiVectorRetriever(

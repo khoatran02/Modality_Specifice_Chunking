@@ -117,28 +117,40 @@ class Chatbot:
                 str: The LLM-generated response.
             """
             # Step 1: Receive the query
-            print(f"Received question: {user_question}")
+            # print(f"Received question: {user_question}")
 
             # Step 2: Retrieval - Perform similarity search
             retrieved_docs = self.retriever.vectorstore.similarity_search(user_question)[:top_k]
 
-            print(f"Retrieved {len(retrieved_docs)} documents for the question.")
+            # print(f"Retrieved {len(retrieved_docs)} documents for the question.")
             
             # Step 3: Prompt Construction
             prompt = self._construct_prompt(user_question, retrieved_docs)
-            print(f"Constructed prompt:\n{prompt}")
+            # print(f"Constructed prompt:\n{prompt}")
 
             # Step 4: Response Generation
             try:
                 response = self.llm.invoke(prompt)
                 response_text = getattr(response, 'content', str(response))
-                print(f"Generated response: {response_text}")
                 
                 # Step 5: Reply to the user
                 return response_text
             except Exception as e:
                 print(f"Error during response generation: {e}")
                 return "Sorry, an error occurred while processing your request."
+
+    def chat(self):
+        """Run an interactive chat session with the user."""
+        print("Welcome to the PDF Chatbot! Type 'exit' to quit.")
+        while True:
+            question = input("Enter your question: ")
+            if question.lower() == "exit":
+                print("Goodbye!")
+                break
+
+            result = self.query(question)
+            print(result)
+            print("--------------------------------------------------")
 
 # Example usage
 if __name__ == "__main__":
@@ -150,9 +162,12 @@ if __name__ == "__main__":
         collection_name="multi_modal_rag",
         persist_directory="vector_db"
     )
+
+    chatbot.chat()
+
     
-    # Example user question
-    user_question = "What is the attention?"
-    response = chatbot.query(user_question)
-    print(f"Chatbot Response: {response}")
+    # # Example user question
+    # user_question = "What is the attention?"
+    # response = chatbot.query(user_question)
+    # print(f"Chatbot Response: {response}")
 

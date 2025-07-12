@@ -131,18 +131,10 @@ class MultimodalPDFProcessor:
 
     def create_knowledge_retriever(self):
 
-        """Creates a knowledge retriever from the extracted content."""
-        # Initialize Chroma with Google's embeddings
-        vectorstore = self.db_manager.create_vectorstore()
-        
-        store = InMemoryStore()
+        """Creates a knowledge retriever from the extracted content."""   
+             
         id_key = "doc_id"
-        
-        retriever = MultiVectorRetriever(
-            vectorstore=vectorstore,
-            docstore=store,
-            id_key=id_key,
-        )
+        retriever = self.db_manager.load_retriever(id_key = "doc_id")
 
         # Process texts
         if self.texts_list:
