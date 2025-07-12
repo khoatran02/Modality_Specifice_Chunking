@@ -1,152 +1,158 @@
 import os
-from typing import Dict, List, Any
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OpenAIEmbeddings  # Optional, if needed
-from langchain.storage import InMemoryStore
-from langchain.schema.document import Document
-from langchain.retrievers.multi_vector import MultiVectorRetriever
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
+
+from typing import List, Dict
+from langchain_core.documents import Document
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
+
+# Import the provided classes
 from MultimodalPDFProcessor import MultimodalPDFProcessor
 from VectorDBManager import VectorDBManager
 
 google_api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyAu9JXweyYbZxiDopgOdRsIIv1D4UkfuXM")  # Just for test
 
-class ChatBot:
-    """A chatbot that answers questions based on a multimodal PDF vector database."""
-    
+class Chatbot:
     def __init__(
         self,
         pdf_path: str,
-        llm_model: str = "gemini-1.5-pro",
+        model: str = "gemini-1.5-pro",
         embedding_model: str = "models/embedding-001",
+        collection_name: str = "pdf_collection",
         persist_directory: str = "vector_db"
     ):
         """
-        Initialize the chatbot with a PDF processor and vector database manager.
+        Initialize the chatbot with a PDF processor and retriever.
+        Check if a vector DB exists; if not, create it; otherwise, load it.
         
         Args:
-            pdf_path (str): Path to the PDF file.
-            llm_model (str): Name of the Google Generative AI model.
-            embedding_model (str): Name of the embedding model.
-            persist_directory (str): Directory for persisting the vectorstore.
+            pdf_path (str): Path to the PDF file to process.
+            model (str): LLM model name (e.g., gemini-1.5-pro).
+            embedding_model (str): Embedding model name.
+            collection_name (str): Name of the vectorstore collection.
+            persist_directory (str): Directory to persist the vectorstore.
         """
-        self.processor = MultimodalPDFProcessor(
+        self.model = model
+        self.pdf_path = pdf_path  # Store pdf_path for processing
+        self.pdf_processor = MultimodalPDFProcessor(
             path=pdf_path,
-            model=llm_model,
+            model=model,
             embedding_model=embedding_model,
+            collection_name=collection_name,
+            persist_directory=persist_directory
+        )
+        self.db_manager = VectorDBManager(
+            embedding_model=embedding_model,
+            collection_name=collection_name,
             persist_directory=persist_directory
         )
         self.llm = ChatGoogleGenerativeAI(
-            model=llm_model,
-            google_api_key=google_api_key
+            google_api_key=SecretStr(google_api_key),
+            model=self.model
         )
-        self.retriever = None
-        self.persist_directory = persist_directory
 
-    def initialize(self):
-        """Initialize the retriever, loading existing or creating new."""
-        self.retriever = self.processor.load_existing_retriever()
-        if not self.retriever:
-            self.processor.extract_content()
-            self.retriever = self.processor.create_knowledge_retriever()
+        # Check if vector DB exists
+        if self.db_manager.exists():
+            print(f"Vector database found at {persist_directory}. Loading existing database...")
+            self.retriever = self.db_manager.load_retriever()
+        else:
+            print(f"No vector database found at {persist_directory}. Creating new database...")
+            self.pdf_processor.extract_content()
+            self.retriever = self.pdf_processor.create_knowledge_retriever()
 
-    def query(self, question: str, top_k: int = 5) -> Dict[str, Any]:
+    def _construct_prompt(self, question: str, documents: List[Document]) -> str:
         """
-        Process a user question and generate a response using the vector database.
+        Construct a prompt by combining the user question with retrieved content.
         
         Args:
             question (str): The user's question.
-            top_k (int): Number of top documents to retrieve.
+            documents (List[Document]): Retrieved documents from the vectorstore.
         
         Returns:
-            dict: Contains the answer and retrieved documents.
+            str: The constructed prompt.
         """
-        if not self.retriever:
-            self.initialize()
+        prompt_template = """
+        You are an expert assistant answering questions based on a provided PDF document.
+        Below is the user's question and relevant information extracted from the PDF, including text, tables, and image descriptions.
+        Use this context to provide an accurate, coherent, and concise answer. If the context is insufficient, state so clearly and provide the best possible response.
 
-        # Step 1: Retrieve relevant documents
-        try:
-            docs = self.retriever.similarity_search(question)[:top_k]
-        except Exception as e:
-            print(f"Error during retrieval: {e}")
-            return {"answer": "Unable to retrieve documents.", "documents": []}
+        **User Question:**
+        {question}
 
-        # Step 2: Construct context from retrieved documents
-        context_chunks = []
-        for doc in docs:
-            doc_type = doc.metadata.get("type", "text" if "text_as_html" not in doc.metadata else "table")
-            content = doc.page_content
-            if doc_type == "table":
-                content = f"Table (HTML format):\n{doc.metadata.get('text_as_html', content)}"
-            elif doc_type == "image":
-                content = f"Image Description:\n{content}"
+        **Context:**
+        {context}
+
+        **Instructions:**
+        - Analyze the context carefully to address the user's question.
+        - If the context includes tables, interpret the table data (provided as text or HTML).
+        - If the context includes image descriptions, use them to provide relevant details.
+        - Do not invent information not present in the context.
+        - Format the answer clearly and professionally.
+        """
+        
+        # Build context from retrieved documents
+        context_parts = []
+        for doc in documents:
+            content_type = doc.metadata.get('type', 'text')
+            if content_type == 'image':
+                context_parts.append(f"Image Description: {doc.page_content}")
+            elif 'text_as_html' in doc.metadata:
+                context_parts.append(f"Table (HTML): {doc.metadata['text_as_html']}\nTable Text: {doc.page_content}")
             else:
-                content = f"Text:\n{content}"
-            context_chunks.append(content)
-
-        context = "\n\n".join(context_chunks)
-
-        # Step 3: Construct prompt
-        prompt_template = ChatPromptTemplate.from_template(
+                context_parts.append(f"Text: {doc.page_content}")
+        
+        context = "\n\n".join(context_parts)
+        
+        # Combine question and context into the prompt
+        return prompt_template.format(question=question, context=context)
+    
+    def query(self, user_question: str, top_k: int = 5) -> str:
             """
-            You are an expert in training planning. Below is a set of information (CONTEXT) extracted from documents, including text, image descriptions, and tables. Please use ONLY this information to accurately and comprehensively answer the user's question (QUESTION).
+            Process a user question and return the LLM-generated response.
             
-            ---
-            CONTEXT:
-            {context}
-            ---
-            QUESTION:
-            {question}
-            ---
-            ANSWER:
+            Args:
+                user_question (str): The user's question.
+                top_k (int): Number of relevant chunks to retrieve.
+            
+            Returns:
+                str: The LLM-generated response.
             """
-        )
+            # Step 1: Receive the query
+            print(f"Received question: {user_question}")
 
-        # Step 4: Generate response
-        try:
-            chain = prompt_template | self.llm
-            response = chain.invoke({"question": question, "context": context})
-            answer = response.content if hasattr(response, 'content') else str(response)
-            return {
-                "answer": answer,
-                "documents": [
-                    {
-                        "content": doc.page_content,
-                        "metadata": doc.metadata,
-                        "type": doc.metadata.get("type", "text" if "text_as_html" not in doc.metadata else "table")
-                    }
-                    for doc in docs
-                ]
-            }
-        except Exception as e:
-            print(f"Error during answer generation: {e}")
-            return {"answer": "Unable to generate answer.", "documents": []}
+            # Step 2: Retrieval - Perform similarity search
+            retrieved_docs = self.retriever.vectorstore.similarity_search(user_question)[:top_k]
 
-    def chat(self):
-        """Run an interactive chat session with the user."""
-        print("Welcome to the PDF Chatbot! Type 'exit' to quit.")
-        while True:
-            question = input("Enter your question: ")
-            if question.lower() == "exit":
-                print("Goodbye!")
-                break
-            result = self.query(question)
-            print("\nAnswer:", result["answer"])
-            print("\nRetrieved Documents:")
-            for i, doc in enumerate(result["documents"], 1):
-                print(f"\nDocument {i}:")
-                print(f"Type: {doc['type']}")
-                print(f"Content: {doc['content'][:200]}...")  # Truncate for readability
-            print("\n" + "="*50 + "\n")
+            print(f"Retrieved {len(retrieved_docs)} documents for the question.")
+            
+            # Step 3: Prompt Construction
+            prompt = self._construct_prompt(user_question, retrieved_docs)
+            print(f"Constructed prompt:\n{prompt}")
+
+            # Step 4: Response Generation
+            try:
+                response = self.llm.invoke(prompt)
+                response_text = getattr(response, 'content', str(response))
+                print(f"Generated response: {response_text}")
+                
+                # Step 5: Reply to the user
+                return response_text
+            except Exception as e:
+                print(f"Error during response generation: {e}")
+                return "Sorry, an error occurred while processing your request."
 
 # Example usage
 if __name__ == "__main__":
-    chatbot = ChatBot(
+    # Initialize the chatbot with a sample PDF
+    chatbot = Chatbot(
         pdf_path="attention_research_paper.pdf",
-        llm_model="gemini-2.5-flash",
+        model="gemini-2.5-flash",  
         embedding_model="models/embedding-001",
+        collection_name="multi_modal_rag",
         persist_directory="vector_db"
     )
-    chatbot.chat()
+    
+    # Example user question
+    user_question = "What is the attention?"
+    response = chatbot.query(user_question)
+    print(f"Chatbot Response: {response}")
+
