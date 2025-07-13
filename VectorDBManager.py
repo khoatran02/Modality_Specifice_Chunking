@@ -49,8 +49,6 @@ class VectorDBManager:
         Raises:
             FileNotFoundError: If the persist_directory or chroma.sqlite3 file does not exist.
         """
-        if not self.exists():
-            raise FileNotFoundError(f"No vector database found at {self.persist_directory}")
                 
         # Load the persisted Chroma vectorstore
         vectorstore = self.create_vectorstore()
